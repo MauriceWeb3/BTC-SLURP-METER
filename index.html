@@ -82,6 +82,7 @@
   .score-line b{color:var(--text)}
 
   .factors{margin-top:18px;display:grid;gap:10px}
+  .warn{margin-top:16px;padding:12px 15px;border:1px solid var(--avoid);border-radius:12px;background:rgba(232,97,91,.1);color:var(--avoid);font-size:12.5px;font-weight:600;line-height:1.45}
   .f{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:15px 16px;display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center}
   .f-name{font-weight:600;font-size:14px}
   .f-desc{font-size:12.5px;color:var(--mute);grid-column:1;line-height:1.45}
@@ -130,6 +131,8 @@
     <div class="score-line">Slurp score <b id="score">—</b> / 100</div>
   </div>
 
+  <div class="warn" id="warn" style="display:none"></div>
+
   <div class="factors" id="factors"></div>
 
   <div class="foot">
@@ -170,17 +173,30 @@ async function fetchData(){
 
 function buildFactors(d){
   const f=[];
-  f.push({name:'Dip from 30-day high',val:(d.drawdown>=0?'+':'')+d.drawdown.toFixed(1)+'%',desc:'How far below the recent peak — deeper dips are tastier slurps.',score:band(d.drawdown,-25,2,false),weight:0.30});
-  f.push({name:'Market mood',val:d.fng+' · '+d.fngLabel,desc:'Fear & Greed Index. Slurp when others are scared.',score:band(d.fng,75,15,true),weight:0.28});
-  f.push({name:'7-day momentum',val:(d.ch7>=0?'+':'')+d.ch7.toFixed(1)+'%',desc:'Recent weakness sweetens the slurp; hot runs say wait.',score:band(d.ch7,-12,12,true),weight:0.22});
-  f.push({name:'24h volatility',val:d.vol.toFixed(1)+'% range',desc:'Wild swings mean a messier slurp — more whipsaw risk.',score:band(d.vol,9,2,true),weight:0.20});
+  // expectBuy(d) returns true when the RAW input direction should be bullish (high score).
+  // This is written independently of band() so it catches inversion bugs in the scoring.
+  f.push({name:'Dip from 30-day high',val:(d.drawdown>=0?'+':'')+d.drawdown.toFixed(1)+'%',desc:'How far below the recent peak — deeper dips are tastier slurps.',score:band(d.drawdown,-25,2,true),weight:0.30,expectBuy:d.drawdown<-8});
+  f.push({name:'Market mood',val:d.fng+' · '+d.fngLabel,desc:'Fear & Greed Index. Slurp when others are scared.',score:band(d.fng,15,75,true),weight:0.28,expectBuy:d.fng<45});
+  f.push({name:'7-day momentum',val:(d.ch7>=0?'+':'')+d.ch7.toFixed(1)+'%',desc:'Recent weakness sweetens the slurp; hot runs say wait.',score:band(d.ch7,-12,12,true),weight:0.22,expectBuy:d.ch7<0});
+  f.push({name:'24h volatility',val:d.vol.toFixed(1)+'% range',desc:'Wild swings mean a messier slurp — more whipsaw risk.',score:band(d.vol,2,9,true),weight:0.20,expectBuy:d.vol<5});
   return f;
+}
+
+// Independent guard: a factor whose raw direction is clearly bullish should not score bearish (and vice versa).
+// Returns a list of names that disagree, so an inversion bug becomes visible instead of silent.
+function findInversions(factors){
+  return factors.filter(f=>{
+    if(f.expectBuy===undefined) return false;
+    if(f.expectBuy && f.score<40) return true;   // should be bullish but scoring bearish
+    if(!f.expectBuy && f.score>60) return true;  // should be bearish but scoring bullish
+    return false;
+  }).map(f=>f.name);
 }
 
 function badge(s){if(s>=60)return['SLURP','b-buy'];if(s>=40)return['SIP','b-wait'];return['SPIT','b-avoid'];}
 
 function verdictFor(s){
-  if(s>=68)return{word:'SLURP IT',accent:'#3ddc97',sub:'Delicious slurps. Beaten-down and fearful — fill the straw.'};
+  if(s>=68)return{word:'SLURP UP',accent:'#3ddc97',sub:'Delicious slurps. Beaten-down and fearful — fill the straw.'};
   if(s>=55)return{word:'TASTY',accent:'#7fd88a',sub:'A pretty good slurp. A measured buy or partial DCA looks fine.'};
   if(s>=45)return{word:'MEH',accent:'#e8b84b',sub:'Lukewarm slurp. DCA on schedule and don\u2019t force the straw.'};
   if(s>=32)return{word:'WEAK SLURP',accent:'#e89a4b',sub:'Bit stretched. Patience over chasing — wait for a better sip.'};
@@ -192,6 +208,10 @@ function render(d){
   document.body.classList.add('slurping');
   $('price').textContent=fmtUSD(d.price);
   const factors=buildFactors(d);
+  const bugs=findInversions(factors);
+  const warn=$('warn');
+  if(bugs.length){warn.style.display='block';warn.textContent='\u26a0 Scoring check failed: '+bugs.join(', ')+' \u2014 a factor is scoring against its own direction. Verdict may be wrong.';}
+  else{warn.style.display='none';}
   const total=Math.round(factors.reduce((a,f)=>a+f.score*f.weight,0));
   const v=verdictFor(total);
   $('verdict').textContent=v.word;
